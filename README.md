@@ -21,8 +21,8 @@ This project bridges a custom ESP32-S3 hardware agent with a local, multi-server
 ## Dependencies
 Ensure your middleman server running the Python bridge has the following installed in its virtual environment:
 
-```bash
-pip install aioesphomeapi faster-whisper gtts pydub requests
+###```bash###
+####pip install aioesphomeapi faster-whisper gtts pydub requests####
 
 
 Running the Agent
