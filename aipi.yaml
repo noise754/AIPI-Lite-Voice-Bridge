@@ -1,0 +1,196 @@
+esphome:
+  name: aipi
+  friendly_name: AiPi
+  on_boot:
+    priority: 800
+    then:
+      - switch.turn_on: board_power
+      - switch.turn_on: speaker_enable
+
+esp32:
+  variant: esp32s3
+  framework:
+    type: esp-idf
+  flash_size: 16MB
+
+# --- MEMORY MANAGEMENT ---
+psram:
+  mode: octal
+
+api:
+  reboot_timeout: 0s
+  services:
+    - service: update_screen
+      variables:
+        msg: string
+      then:
+        - lvgl.label.update:
+            id: ai_response_label
+            text: !lambda 'return msg.c_str();'
+            
+    - service: prepare_speaker
+      then:
+        - switch.turn_on: speaker_enable
+        - delay: 50ms
+        - lambda: |-
+            // Unmute DAC for playback
+            uint8_t unmute[] = {0x31, 0x00};
+            id(i2c_es8311)->write(0x18, unmute, 2, true);
+            ESP_LOGD("custom", "API: ES8311 Unmuted.");
+        
+    - service: restore_mic
+      then:
+        - media_player.stop: speaker_media_player_id
+        - delay: 50ms
+        - lambda: |-
+            // Mute DAC
+            uint8_t mute[] = {0x31, 0xFF};
+            id(i2c_es8311)->write(0x18, mute, 2, true);
+            ESP_LOGD("custom", "API: ES8311 Muted.");
+        - delay: 50ms
+        # CUT POWER TO THE AMPLIFIER SO IT CANNOT HISS
+        - switch.turn_off: speaker_enable
+
+logger:
+  level: VERY_VERBOSE
+
+wifi:
+  ssid: "nemesis3"
+  password: "S@turn1976"
+
+i2c:
+  sda: GPIO5
+  scl: GPIO4
+  id: i2c_es8311
+  scan: true
+
+spi:
+  clk_pin: GPIO16
+  mosi_pin: GPIO17
+
+display:
+  - platform: mipi_spi
+    id: aipi_display
+    model: ST7735
+    cs_pin: GPIO15
+    dc_pin: GPIO7
+    reset_pin: GPIO18
+    dimensions:
+      width: 128
+      height: 128
+    rotation: 90
+
+lvgl:
+  id: my_lvgl
+  displays: aipi_display
+  widgets:
+    - obj:
+        id: left_eye
+        width: 30
+        height: 40
+        align: CENTER
+        x: -35
+    - obj:
+        id: right_eye
+        width: 30
+        height: 40
+        align: CENTER
+        x: 35
+    - label:
+        id: ai_response_label
+        text: "Ready."
+        align: BOTTOM_MID
+        y: -5
+        width: 120
+        text_align: CENTER
+        long_mode: WRAP
+
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    address: 0x18
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO12
+    i2s_bclk_pin: GPIO14
+    i2s_mclk_pin: GPIO6
+
+microphone:
+  - platform: i2s_audio
+    id: i2s_mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO13
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    bits_per_sample: 16bit
+
+speaker:
+  - platform: i2s_audio
+    id: speaker_id
+    i2s_audio_id: i2s_bus
+    i2s_dout_pin: GPIO11
+    dac_type: external
+    mclk_multiple: 256
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: mono
+    audio_dac: es8311_dac
+
+media_player:
+  - platform: speaker
+    name: AiPi Media Player
+    id: speaker_media_player_id
+    buffer_size: 8192 
+    volume_min: 0.75
+    volume_max: 1.0
+    announcement_pipeline:
+      speaker: speaker_id
+      num_channels: 1
+
+voice_assistant:
+  id: va
+  microphone: i2s_mic
+
+switch:
+  - platform: gpio
+    pin: GPIO10
+    id: board_power
+    name: "Board Power Control"
+    restore_mode: ALWAYS_ON
+    internal: true
+
+  - platform: gpio
+    pin: GPIO09
+    id: speaker_enable
+    name: "Speaker Amplifier"
+    restore_mode: ALWAYS_ON
+
+output:
+  - platform: ledc
+    pin: GPIO3
+    id: backlight_pwm
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: lcd_backlight
+    restore_mode: RESTORE_DEFAULT_ON
+
+binary_sensor:
+  - platform: gpio
+    pin: GPIO42
+    name: "Right Button"
+    filters:
+      - invert:
+    on_press:
+      then:
+        # Guarantee the amp is dead before we start recording
+        - switch.turn_off: speaker_enable 
+        - voice_assistant.start:
+    on_release:
+      then:
+        - voice_assistant.stop:
