@@ -42,3 +42,4 @@ Ensure your middleman server running the Python bridge has the following install
 ```bash
 
 pip install aioesphomeapi faster-whisper gtts pydub requests
+# AIPI-Lite-Voice-Bridge
