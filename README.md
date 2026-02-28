@@ -26,7 +26,7 @@ Robert Lipe: For the phenomenal deep-dive engineering and documentation on the A
 
 sticks918: For the foundational ESPHome configurations and the AiPi-Lite repository that made this custom integration possible. Check out the repo here: https://github.com/sticks918/AIPI-Lite-ESPHome
 
-##Running the Agent
+## Running the Agent
 
 Flash aipi.yaml (I was using Visual Studio Code) to your ESP32-S3.
 
@@ -35,7 +35,7 @@ Ensure your AI backend server is running its local LLM (in my case it is llama-c
 Start the bridge: python3 bridge.py
 
 
-##Dependencies
+## Dependencies
 
 Ensure your middleman server running the Python bridge has the following installed in its virtual environment:
 
