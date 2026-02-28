@@ -34,7 +34,9 @@ Start the bridge: python3 bridge.py
 
 
 Dependencies
+
 Ensure your middleman server running the Python bridge has the following installed in its virtual environment:
 
 ```bash
+
 pip install aioesphomeapi faster-whisper gtts pydub requests
