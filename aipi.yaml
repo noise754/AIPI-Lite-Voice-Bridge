@@ -55,8 +55,8 @@ logger:
   level: VERY_VERBOSE
 
 wifi:
-  ssid: "nemesis3"
-  password: "S@turn1976"
+  ssid: "YOUR_SSID"
+  password: "YOUR_WIFI_PASSWORD"
 
 i2c:
   sda: GPIO5
