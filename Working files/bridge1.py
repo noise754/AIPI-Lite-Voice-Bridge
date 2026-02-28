@@ -1,0 +1,244 @@
+import asyncio, socket, io, wave, re, requests, math, struct, threading, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from aioesphomeapi import APIClient, VoiceAssistantEventType
+from faster_whisper import WhisperModel
+from gtts import gTTS
+from pydub import AudioSegment
+from pydub.generators import Sine
+
+# --- CONFIGURATION ---
+AIPI_IP = "aipi.local" 
+HOST_IP = "10.0.100.62" 
+PORT = 8080
+GPU_SERVER_URL = "http://10.0.100.52:8080/v1/chat/completions" 
+UDP_PORT = 50000
+
+print("DEBUG: Loading Whisper (Tiny.en)...")
+stt_model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+
+VOICE_WAV_BYTES = b""
+
+class VoiceHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(f"DEBUG: [HTTP] ESP32 requested the audio file! Sending {len(VOICE_WAV_BYTES)} bytes...")
+        self.send_response(200)
+        self.send_header("Content-type", "audio/wav")
+        self.send_header("Content-Length", str(len(VOICE_WAV_BYTES)))
+        self.send_header("Connection", "close") 
+        self.end_headers()
+        self.wfile.write(VOICE_WAV_BYTES)
+
+    def log_message(self, format, *args):
+        pass 
+
+class MasterBridge:
+    def __init__(self, cli):
+        self.cli = cli
+        self.audio_buffer = bytearray()
+        self.is_recording = False
+        self.is_processing = False 
+        self.loop = asyncio.get_event_loop()
+
+    async def handle_start(self, conversation_id, sample_rate, audio_settings, wakeword):
+        if self.is_processing:
+            print("\nDEBUG: Ignored button press. AI is still processing.")
+            return UDP_PORT
+            
+        print("\n[EVENT] Voice Start - Capturing Microphone...")
+        self.audio_buffer.clear()
+        self.is_recording = True
+        return UDP_PORT
+
+    async def handle_stop(self, is_cancelled):
+        self.is_recording = False
+        
+        if self.is_processing:
+            return 
+            
+        print(f"[EVENT] Voice Stop - Received {len(self.audio_buffer)} bytes.")
+        if len(self.audio_buffer) > 1000:
+            print("DEBUG: Buffer threshold met. Launching process_voice task...")
+            self.loop.create_task(self.process_voice())
+        else:
+            print("DEBUG: Buffer too small, ignoring audio.")
+
+    async def handle_audio(self, data):
+        if self.is_recording and not self.is_processing:
+            self.audio_buffer.extend(data)
+
+    async def process_voice(self):
+        self.is_processing = True 
+        try:
+            print(f"DEBUG: [1/4] process_voice started. Buffer size: {len(self.audio_buffer)}")
+            
+            try:
+                self.cli.send_voice_assistant_event(VoiceAssistantEventType.VOICE_ASSISTANT_RUN_END, {})
+            except Exception as e:
+                print(f"DEBUG: Non-fatal error sending RUN_END: {e}")
+            
+            debug_file = "debug_mic.wav"
+            with wave.open(debug_file, 'wb') as f:
+                f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+                f.writeframes(bytes(self.audio_buffer))
+
+            # --- DIAGNOSTIC ---
+            wav_io = io.BytesIO(bytes(self.audio_buffer))
+            diagnostic_audio = AudioSegment.from_raw(wav_io, sample_width=2, frame_rate=16000, channels=1)
+            print(f"DEBUG: Mic Audio Volume: {diagnostic_audio.dBFS:.2f} dBFS")
+            # ------------------
+
+            print("DEBUG: [2/4] Handing audio to Whisper...")
+            def do_transcribe():
+                segments, _ = stt_model.transcribe(debug_file, beam_size=1)
+                return " ".join([s.text for s in segments]).strip()
+            
+            text = await asyncio.to_thread(do_transcribe)
+            if not text: 
+                print("DEBUG: [ABORT] Whisper returned an empty string. Mic likely captured static.")
+                return
+                
+            print(f"Whisper Heard: {text}")
+
+            print("DEBUG: [3/4] Querying local LLM on AMD machine...")
+            
+            # --- UPDATED LLM LOGIC ---
+            # Added a system prompt to force the AI to format its output correctly
+            r = await asyncio.to_thread(requests.post, GPU_SERVER_URL, json={
+                "model": "DeepSeek-R1-1.5B-Q8_0",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful voice assistant. Keep answers concise. Always provide your final spoken answer OUTSIDE of the <think> tags."},
+                    {"role": "user", "content": text}
+                ],
+                "max_tokens": 500,
+                "temperature": 0.6
+            }, timeout=60)
+            
+            raw_text = r.json()['choices'][0]['message'].get('content', '')
+            print(f"DEBUG: Raw LLM String length: {len(raw_text)}")
+            
+            # Try to strip the think block cleanly
+            clean = re.sub(r'(?i)<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
+            
+            # If the LLM hallucinated and put everything inside the think block, 
+            # don't say "I am ready." Instead, just read the thought process!
+            if not clean: 
+                print("DEBUG: LLM forgot to close think tags or output final text. Using raw output.")
+                clean = raw_text.replace('<think>', '').replace('</think>', '').strip()
+                
+            if not clean: 
+                clean = "I am having trouble finding the words."
+                
+            print(f"AI Responded: {clean}")
+            # -------------------------
+
+            print("DEBUG: [4/4] Generating TTS & Waking DAC...")
+            def do_tts():
+                tts = gTTS(text=clean, lang='en')
+                mp3_fp = io.BytesIO()
+                tts.write_to_fp(mp3_fp)
+                mp3_fp.seek(0)
+                return AudioSegment.from_file(mp3_fp, format="mp3").set_frame_rate(16000).set_channels(1).set_sample_width(2)
+            
+            voice_audio = await asyncio.to_thread(do_tts)
+            
+            beep = Sine(440).to_audio_segment(duration=500).set_frame_rate(16000).set_channels(1).set_sample_width(2)
+            silence = AudioSegment.silent(duration=500, frame_rate=16000) 
+            final_audio = beep + voice_audio + silence
+            
+            # --- THE VOLUME KNOB ---
+            # Lower the volume by 15 decibels
+            final_audio = final_audio - 15 
+            # -----------------------
+
+            playback_duration_sec = len(final_audio) / 1000.0
+            
+            out_wav_io = io.BytesIO()
+            final_audio.export(out_wav_io, format="wav")
+            
+            global VOICE_WAV_BYTES
+            VOICE_WAV_BYTES = out_wav_io.getvalue()
+
+            _, services = await self.cli.list_entities_services()
+            prepare_speaker = next((s for s in services if s.name == "prepare_speaker"), None)
+            restore_mic = next((s for s in services if s.name == "restore_mic"), None)
+            
+            entities, _ = await self.cli.list_entities_services()
+            media_player = next((e for e in entities if e.name == "AiPi Media Player"), None)
+
+            if prepare_speaker and media_player and restore_mic:
+                await self.cli.execute_service(service=prepare_speaker, data={})
+                await asyncio.sleep(1.0)
+                
+                url = f"http://{HOST_IP}:{PORT}/voice.wav?t={int(time.time())}"
+                print(f"DEBUG: Commanding media player to stream {url}...")
+                res = self.cli.media_player_command(media_player.key, media_url=url)
+                if asyncio.iscoroutine(res):
+                    await res
+                    
+                print(f"DEBUG: Sleeping for {playback_duration_sec + 0.5:.2f} seconds to allow playback...")
+                await asyncio.sleep(playback_duration_sec + 0.5)
+                
+                print("DEBUG: Cleaning up hardware gracefully...")
+                try:
+                    await self.cli.execute_service(service=restore_mic, data={})
+                except Exception as e:
+                    print(f"DEBUG: Cleanup error: {e}")
+                
+                print("Hardware pipeline reset. Ready for next prompt instantly.")
+            else:
+                print("ERROR: ESP32 services are missing. Check your aipi.yaml.")
+
+        except Exception as e:
+            print(f"DEBUG: [CRASH] Processing Error: {e}")
+            try:
+                _, services = await self.cli.list_entities_services()
+                restore_mic = next((s for s in services if s.name == "restore_mic"), None)
+                if restore_mic: await self.cli.execute_service(service=restore_mic, data={})
+            except: pass
+        finally:
+            self.is_processing = False 
+
+    async def udp_listener(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('0.0.0.0', UDP_PORT))
+        sock.setblocking(False)
+        while True:
+            try:
+                data, _ = await self.loop.sock_recvfrom(sock, 4096)
+                if self.is_recording and not self.is_processing:
+                    self.audio_buffer.extend(data)
+            except:
+                await asyncio.sleep(0.001)
+
+async def main():
+    server = HTTPServer(('0.0.0.0', PORT), VoiceHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"Internal HTTP Server initialized at http://{HOST_IP}:{PORT}/voice.wav")
+
+    cli = APIClient(AIPI_IP, 6053, password=None)
+    bridge = MasterBridge(cli)
+    
+    asyncio.create_task(bridge.udp_listener())
+    
+    while True:
+        try:
+            print(f"Connecting to AiPi at {AIPI_IP}...")
+            await cli.connect(login=True)
+            cli.subscribe_voice_assistant(
+                handle_start=bridge.handle_start, 
+                handle_stop=bridge.handle_stop, 
+                handle_audio=bridge.handle_audio
+            )
+            print("Connected and Subscribed.")
+            
+            while True:
+                await asyncio.sleep(10)
+                
+        except Exception as e:
+            print(f"Connection Error: {e}")
+            try: await cli.disconnect()
+            except: pass
+            await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(main())

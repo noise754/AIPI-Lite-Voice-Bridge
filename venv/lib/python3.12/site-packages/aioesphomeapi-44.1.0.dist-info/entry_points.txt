@@ -1,0 +1,3 @@
+[console_scripts]
+aioesphomeapi-discover = aioesphomeapi.discover:cli_entry_point
+aioesphomeapi-logs = aioesphomeapi.log_reader:cli_entry_point
