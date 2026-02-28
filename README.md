@@ -24,6 +24,7 @@ Ensure your middleman server running the Python bridge has the following install
 ```bash
 pip install aioesphomeapi faster-whisper gtts pydub requests
 
+
 Running the Agent
 Flash aipi.yaml (I was using Visual Studio Code) to your ESP32-S3.
 
