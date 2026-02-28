@@ -21,24 +21,5 @@ This project bridges a custom ESP32-S3 hardware agent with a local, multi-server
 ## Dependencies
 Ensure your middleman server running the Python bridge has the following installed in its virtual environment:
 
-
 ```bash
 pip install aioesphomeapi faster-whisper gtts pydub requests
-
-
-Running the Agent
-
-Flash aipi.yaml (I was using Visual Studio Code) to your ESP32-S3.
-
-Ensure your AI backend server is running its local LLM in my case it is llama-cpp.
-
-Start the bridge: python3 bridge.py
-
-Acknowledgements & Credits
-
-
-This build stands on the shoulders of giants. A massive thank you to the developers who laid the groundwork for this hardware:
-
-Robert Lipe: For the phenomenal deep-dive engineering and documentation on the AiPi hardware and I2S/I2C interfacing. Read his work here: https://www.robertlipe.com/449-2/
-
-sticks918: For the foundational ESPHome configurations and the AiPi-Lite repository that made this custom integration possible. Check out the repo here: https://github.com/sticks918/AIPI-Lite-ESPHome
