@@ -18,14 +18,16 @@ This project bridges a custom ESP32-S3 hardware agent with a local, multi-server
 4. **I2C Deep Mute:** The `restore_mic` service explicitly commands `media_player.stop` and sends a deep mute command via I2C to the ES8311 DAC. This physically releases the I2S clocks between prompts without killing the shared data lines the microphone relies on.
 5. **Dynamic Audio Control:** The Python script uses a `?t=timestamp` URL parameter for cache-busting so the ESP32 never plays stale audio, and includes a built-in `pydub` decibel reduction step to safely limit physical speaker volume.
 
-Acknowledgements & Credits
+## Acknowledgements & Credits
+
 This build stands on the shoulders of giants. A massive thank you to the developers who laid the groundwork for this hardware:
 
 Robert Lipe: For the phenomenal deep-dive engineering and documentation on the AiPi hardware and I2S/I2C interfacing. Read his work here: https://www.robertlipe.com/449-2/
 
 sticks918: For the foundational ESPHome configurations and the AiPi-Lite repository that made this custom integration possible. Check out the repo here: https://github.com/sticks918/AIPI-Lite-ESPHome
 
-Running the Agent
+##Running the Agent
+
 Flash aipi.yaml (I was using Visual Studio Code) to your ESP32-S3.
 
 Ensure your AI backend server is running its local LLM (in my case it is llama-cpp).
@@ -33,7 +35,7 @@ Ensure your AI backend server is running its local LLM (in my case it is llama-c
 Start the bridge: python3 bridge.py
 
 
-Dependencies
+##Dependencies
 
 Ensure your middleman server running the Python bridge has the following installed in its virtual environment:
 
